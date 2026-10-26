@@ -1,0 +1,14 @@
+# Keep every checkout LF, including on Windows: these files feed bash, make,
+# patch and GitHub Actions, all of which break on CRLF.
+* text=auto eol=lf
+
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+
+# Binary artifacts, in case any are ever committed by accident.
+*.zip binary
+*.tar.gz binary
+*.png binary

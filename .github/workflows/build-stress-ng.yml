@@ -1,0 +1,124 @@
+name: Build stress-ng for Android
+
+on:
+  schedule:
+    # Daily at 19:17 UTC (03:17 Beijing), away from the top-of-hour rush.
+    - cron: '17 19 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Upstream tag or version (e.g. V0.22.01 or 0.22.01). Empty = latest release.'
+        required: false
+        type: string
+      force:
+        description: 'Rebuild and overwrite the Release even if it already exists.'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TOOL: stress-ng
+  UPSTREAM_REPO: stress-ng/stress-ng
+  NDK_VERSION: '30.0.16248370'
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      upstream_tag: ${{ steps.resolve.outputs.upstream_tag }}
+      commit: ${{ steps.resolve.outputs.commit }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      source_sha256: ${{ steps.resolve.outputs.source_sha256 }}
+      skip: ${{ steps.resolve.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve upstream release
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          FORCE: ${{ github.event.inputs.force }}
+        run: bash scripts/resolve-upstream.sh "$TOOL" "$UPSTREAM_REPO"
+
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+            triple: aarch64-linux-android
+            api: '29'
+          - abi: armeabi-v7a
+            triple: armv7a-linux-androideabi
+            api: '26'
+          - abi: x86_64
+            triple: x86_64-linux-android
+            api: '26'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up pinned NDK
+        run: bash scripts/setup-ndk.sh
+      - name: Build
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          UPSTREAM_COMMIT: ${{ needs.resolve.outputs.commit }}
+          ABI: ${{ matrix.abi }}
+          TRIPLE: ${{ matrix.triple }}
+          API: ${{ matrix.api }}
+        run: bash scripts/build-stress-ng.sh
+      - name: Verify static binary
+        env:
+          ABI: ${{ matrix.abi }}
+        run: bash scripts/verify-static.sh "out/stress-ng/$ABI/stress-ng" "$ABI"
+      - name: Stage executable
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          ABI: ${{ matrix.abi }}
+        run: |
+          mkdir -p dist
+          bash scripts/package.sh stress-ng "$VERSION" "$ABI" \
+            "out/stress-ng/$ABI/stress-ng" dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: stress-ng-${{ needs.resolve.outputs.version }}-${{ matrix.abi }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: [resolve, build]
+    if: needs.resolve.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Prepare release assets and notes
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          UPSTREAM_TAG: ${{ needs.resolve.outputs.upstream_tag }}
+          UPSTREAM_COMMIT: ${{ needs.resolve.outputs.commit }}
+          SOURCE_SHA256: ${{ needs.resolve.outputs.source_sha256 }}
+        run: bash scripts/prepare-release.sh "$TOOL" "$UPSTREAM_REPO" "$VERSION" dist release-notes.md
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.resolve.outputs.release_tag }}
+          name: stress-ng ${{ needs.resolve.outputs.version }} (Android)
+          body_path: release-notes.md
+          files: dist/*
+          make_latest: true
+          overwrite_files: true
+          fail_on_unmatched_files: true

@@ -1,0 +1,8 @@
+.idea/
+.ndk/
+out/
+dist/
+source.tar.gz
+release-notes.md
+*.tar.gz
+*.zip
