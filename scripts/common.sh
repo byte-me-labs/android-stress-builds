@@ -39,15 +39,21 @@ ndk_is_version() {
     grep -q "^Pkg.Revision = ${NDK_VERSION}$" "$dir/source.properties"
 }
 
-# Apply repository-owned patches in lexical order, if any exist.
+# Apply repository-owned patches in lexical order, if any exist.  A patch that no
+# longer applies (typically because upstream fixed the issue it worked around) is
+# skipped with a warning so the build can keep following upstream releases.
 apply_patches() {
   local tool="$1" src="$2"
   local dir="${COMMON_DIR}/../patches/${tool}"
   local patchfile
   shopt -s nullglob
   for patchfile in "${dir}"/*.patch; do
-    log "applying $(basename "$patchfile")"
-    patch -p1 -d "$src" < "$patchfile"
+    if patch -p1 -d "$src" --dry-run < "$patchfile" >/dev/null 2>&1; then
+      log "applying $(basename "$patchfile")"
+      patch -p1 -d "$src" < "$patchfile"
+    else
+      log "WARNING: $(basename "$patchfile") no longer applies, skipping"
+    fi
   done
   shopt -u nullglob
 }

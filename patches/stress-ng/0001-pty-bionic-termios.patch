@@ -1,0 +1,48 @@
+bionic/Android: fix struct termios breakage in stress-pty.c
+
+stress-ng V0.22.02 includes <asm/termbits.h> with `termios` renamed to
+`ioctl_termios` so it can use the kernel UAPI struct alongside the libc
+one.  On bionic, <termios.h> is itself implemented on top of the Linux
+UAPI headers and struct termios is defined inside <asm-generic/termbits.h>
+under the __ASM_GENERIC_TERMBITS_H include guard.  Processing that header
+first with the rename macro sets the guard, so the later <termios.h> is
+skipped and struct termios is never defined:
+
+  bits/termios_inlines.h:50:47: error: incomplete definition of type
+      'const struct termios'
+  stress-pty.c:204:20: error: variable has incomplete type 'struct termios'
+
+There is no need for the rename trick on bionic: bionic's struct termios
+is the kernel UAPI struct, so include <termios.h> and alias ioctl_termios
+to termios instead.  Other platforms keep the upstream behaviour.
+
+This patch targets stress-ng V0.22.02.  scripts/common.sh skips patches
+that no longer apply, so once upstream fixes this it becomes a no-op.
+
+--- a/stress-pty.c
++++ b/stress-pty.c
+@@ -20,6 +20,16 @@
+
+ #if defined(HAVE_ASM_TERMBITS_H) &&		\
+     defined(HAVE_ASM_TERMBITS_STRUCT_TERMIOS)
++#if defined(__ANDROID__)
++/*
++ *  bionic's <termios.h> is implemented on top of the Linux UAPI struct
++ *  termios.  Including <asm/termbits.h> with termios renamed would set
++ *  __ASM_GENERIC_TERMBITS_H, so the later <termios.h> could never define
++ *  struct termios.  Alias ioctl_termios to termios instead.
++ */
++#include <termios.h>
++#define ioctl_termios termios
++#else
+ /*
+  *  rename termbits termios to ioctl_termios
+  */
+@@ -27,6 +37,7 @@
+ #include <asm/termbits.h>
+ #undef termios
+ #endif
++#endif
+
+ #include <sys/ioctl.h>
+
